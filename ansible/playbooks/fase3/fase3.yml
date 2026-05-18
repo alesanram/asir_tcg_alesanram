@@ -18,7 +18,7 @@
         - { name: metallb,       url: "https://metallb.github.io/metallb" }
         - { name: jetstack,      url: "https://charts.jetstack.io" }
         - { name: ingress-nginx, url: "https://kubernetes.github.io/ingress-nginx" }
-        - { name: bitnami,       url: "https://charts.bitnami.com/bitnami" }
+        - { name: bitnami,       url: "https://raw.githubusercontent.com/bitnami/charts/archive-full-index/bitnami" }
 
     - name: "Actualizar repos Helm"
       command: helm repo update
