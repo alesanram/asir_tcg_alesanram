@@ -1,0 +1,78 @@
+---
+- name: "Fase 4 — Prometheus + Grafana"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    k8s_dir: /vagrant/k8s
+    kubeconfig: /home/vagrant/.kube/config
+
+  tasks:
+
+    - name: "Añadir repo prometheus-community"
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+
+    - name: "Actualizar repos Helm"
+      command: helm repo update
+      changed_when: false
+
+    - name: "Crear namespace monitoring"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: monitoring
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+
+    - name: "Instalar kube-prometheus-stack"
+      kubernetes.core.helm:
+        name: kube-prometheus-stack
+        chart_ref: prometheus-community/kube-prometheus-stack
+        release_namespace: monitoring
+        kubeconfig: "{{ kubeconfig }}"
+        values_files:
+          - "{{ k8s_dir }}/monitoring/values.yml"
+        wait: true
+        timeout: 10m
+
+    - name: "Esperar a que Grafana esté listo"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: kube-prometheus-stack-grafana
+        namespace: monitoring
+        kubeconfig: "{{ kubeconfig }}"
+      register: grafana_deploy
+      until: >
+        (grafana_deploy.resources | first).status.readyReplicas | default(0) | int > 0
+      retries: 30
+      delay: 15
+
+    - name: "Esperar a que Prometheus esté listo"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: StatefulSet
+        name: prometheus-kube-prometheus-stack-prometheus
+        namespace: monitoring
+        kubeconfig: "{{ kubeconfig }}"
+      register: prom_sts
+      until: >
+        (prom_sts.resources | first).status.readyReplicas | default(0) | int > 0
+      retries: 30
+      delay: 15
+
+    - name: "Pods en namespace monitoring"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: monitoring
+        kubeconfig: "{{ kubeconfig }}"
+      register: mon_pods
+
+    - name: "Estado de pods"
+      debug:
+        msg: "{{ item.metadata.name }}: {{ item.status.phase }}"
+      loop: "{{ mon_pods.resources }}"

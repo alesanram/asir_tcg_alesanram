@@ -1,0 +1,29 @@
+architecture: replication
+
+auth:
+  rootPassword: "R00tTCG2024!"
+  database: wordpress
+  username: wordpress
+  password: "WpTCG2024!"
+  replicationUser: replicator
+  replicationPassword: "ReplTCG2024!"
+
+primary:
+  persistence:
+    enabled: false          # sin PVC en lab — cambiar a true con StorageClass
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+secondary:
+  replicaCount: 1           # 1 esclavo (master + slave = 2 instancias)
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+metrics:
+  enabled: false

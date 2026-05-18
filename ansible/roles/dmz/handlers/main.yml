@@ -1,0 +1,9 @@
+- name: Recargar nftables
+  systemd:
+    name: nftables
+    state: restarted
+
+- name: Reiniciar dnsmasq
+  systemd:
+    name: dnsmasq
+    state: restarted

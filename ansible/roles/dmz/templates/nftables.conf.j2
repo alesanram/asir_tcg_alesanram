@@ -1,0 +1,58 @@
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet filter {
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        iif lo accept
+
+        ct state established,related accept
+
+        tcp dport 22 accept
+
+        iif {{ edge_external_iface }} tcp dport { 80, 443 } accept
+
+        iif {{ edge_internal_iface }} udp dport 53 accept
+        iif {{ edge_internal_iface }} tcp dport 53 accept
+
+        iif {{ edge_internal_iface }} accept
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+
+        ct state established,related accept
+
+        iif {{ edge_external_iface }} oif {{ edge_internal_iface }} \
+            ip daddr {{ ingress_ip }} tcp dport { {{ http_nodeport }}, {{ https_nodeport }} } \
+            ct state new accept
+
+        iif {{ edge_internal_iface }} oif {{ edge_external_iface }} accept
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}
+
+table ip nat {
+
+    chain prerouting {
+        type nat hook prerouting priority -100;
+
+        iif {{ edge_external_iface }} tcp dport 80 \
+            dnat to {{ ingress_ip }}:{{ http_nodeport }}
+
+        iif {{ edge_external_iface }} tcp dport 443 \
+            dnat to {{ ingress_ip }}:{{ https_nodeport }}
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority 100;
+
+        oif {{ edge_external_iface }} masquerade
+    }
+}

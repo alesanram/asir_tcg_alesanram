@@ -1,0 +1,96 @@
+---
+- name: "[1/3] DMZ — nftables en edge-gateway"
+  hosts: edge
+  become: true
+  vars:
+    edge_external_iface: enp0s3
+    edge_internal_iface: enp0s8
+    ingress_ip: 192.168.56.14       # worker3 — NGINX Ingress NodePort
+    http_nodeport: 30080
+    https_nodeport: 30443
+
+  roles:
+    - dmz
+
+  post_tasks:
+    - name: Mostrar reglas nftables activas
+      command: nft list ruleset
+      register: nft_rules
+      changed_when: false
+
+    - name: Resultado nftables
+      debug:
+        msg: "{{ nft_rules.stdout_lines }}"
+
+    - name: Confirmar IP forwarding habilitado
+      command: sysctl -n net.ipv4.ip_forward
+      register: fwd
+      changed_when: false
+      failed_when: fwd.stdout != "1"
+
+- name: "[2/3] Aislar NAT — cluster y ansible-control"
+  hosts: k8s_cluster:ansible
+  become: true
+  vars:
+    edge_external_iface: enp0s3
+    edge_internal_iface: enp0s8
+
+  roles:
+    - isolate-nat
+
+  post_tasks:
+    - name: Verificar ruta por defecto apunta al edge
+      command: ip route show default
+      register: route_check
+      changed_when: false
+
+    - name: Resultado ruta
+      debug:
+        msg: "{{ route_check.stdout }}"
+
+- name: "[3/3] Verificar exposición de servicios"
+  hosts: k8s_cluster
+  become: false
+
+  tasks:
+    - name: Comprobar salida TCP a internet vía edge
+      shell: curl -s --max-time 10 http://1.1.1.1 -o /dev/null -w "%{http_code}"
+      register: tcp_check
+      changed_when: false
+      failed_when: false
+
+    - name: Resultado conectividad
+      debug:
+        msg: "{{ inventory_hostname }}: TCP={{ tcp_check.stdout | default('sin respuesta') }}"
+
+    - name: Fallo si no hay salida a internet
+      fail:
+        msg: >
+          {{ inventory_hostname }} no puede salir a internet vía edge-gateway.
+          Verifica nftables FORWARD, MASQUERADE e ip_forward en edge.
+      when: tcp_check.stdout not in ['200', '301', '302']
+
+- name: "Resumen final del proyecto"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Resumen
+      debug:
+        msg:
+          - "══════════════════════════════════════════════════"
+          - " Proyecto completado"
+          - "══════════════════════════════════════════════════"
+          - " Servicios expuestos vía edge (192.168.56.15):"
+          - ""
+          - "   https://wordpress.tcg.local  → WordPress"
+          - ""
+          - " Grafana:    https://grafana.tcg.local"
+          - " Usuario:    admin"
+          - " Password:   GrafanaTCG2024!"
+          - ""
+          - " Añade al hosts de Windows:"
+          - "   192.168.56.15  wordpress.tcg.local"
+          - "   192.168.56.15  grafana.tcg.local"
+          - "══════════════════════════════════════════════════"

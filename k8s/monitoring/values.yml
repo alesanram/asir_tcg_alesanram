@@ -1,0 +1,72 @@
+# kube-prometheus-stack — Prometheus + Grafana + AlertManager + Node Exporter
+
+# ── Grafana ───────────────────────────────────────────────
+grafana:
+  enabled: true
+  adminPassword: "GrafanaTCG2024!"
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.tcg.local
+    tls:
+      - secretName: grafana-tls
+        hosts:
+          - grafana.tcg.local
+    annotations:
+      cert-manager.io/cluster-issuer: tcg-ca-issuer
+
+  persistence:
+    enabled: false           # sin PVC en lab
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  # Dashboards predefinidos para Kubernetes
+  defaultDashboardsEnabled: true
+  defaultDashboardsTimezone: Europe/Madrid
+
+# ── Prometheus ────────────────────────────────────────────
+prometheus:
+  enabled: true
+
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+    # Descubrir ServiceMonitors de todos los namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+    storageSpec: {}          # sin PVC en lab
+
+# ── AlertManager ─────────────────────────────────────────
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+
+# ── Node Exporter ─────────────────────────────────────────
+nodeExporter:
+  enabled: true
+
+# ── kube-state-metrics ────────────────────────────────────
+kubeStateMetrics:
+  enabled: true
+
+# ── Componentes del plano de control ─────────────────────
+kubeControllerManager:
+  enabled: true
+kubeScheduler:
+  enabled: true
+kubeEtcd:
+  enabled: true

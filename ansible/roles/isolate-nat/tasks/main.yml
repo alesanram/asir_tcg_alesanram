@@ -1,0 +1,38 @@
+- name: Instalar iptables-persistent
+  apt:
+    name: iptables-persistent
+    state: present
+    update_cache: yes
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Desplegar configuración netplan (ruta vía edge-gateway)
+  template:
+    src: 99-isolate-nat.yaml.j2
+    dest: /etc/netplan/99-isolate-nat.yaml
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Aplicar netplan
+  shell: netplan apply
+  changed_when: false
+
+- name: Verificar que la ruta por defecto apunta al edge
+  shell: ip route show default
+  register: route_check
+  changed_when: false
+  failed_when: "'192.168.56.15' not in route_check.stdout"
+
+
+- name: Bloquear nuevas conexiones salientes por {{ edge_external_iface }}
+  iptables:
+    chain: OUTPUT
+    out_interface: "{{ edge_external_iface }}"
+    ctstate: NEW
+    jump: DROP
+    comment: "DMZ: forzar salida via edge-gateway"
+
+- name: Guardar reglas iptables
+  shell: iptables-save > /etc/iptables/rules.v4
+  changed_when: false

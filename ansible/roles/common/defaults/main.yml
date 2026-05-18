@@ -1,0 +1,7 @@
+packages_common:
+  - vim
+  - curl
+  - git
+  - python3
+  - python3-pip
+  - software-properties-common

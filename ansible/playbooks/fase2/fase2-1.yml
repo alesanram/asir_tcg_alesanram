@@ -1,0 +1,382 @@
+---
+- name: "[0/4] Limpiar estado previo de Kubernetes"
+  hosts: k8s_cluster
+  become: true
+  vars:
+    ansible_become_timeout: 60
+
+  tasks:
+
+    - name: Comprobar si el nodo ya está inicializado/unido
+      stat:
+        path: "{{ '/etc/kubernetes/admin.conf' if inventory_hostname in groups['kube_control_plane'] else '/etc/kubernetes/kubelet.conf' }}"
+      register: k8s_initialized
+      become: false
+
+    - name: Resetear kubeadm si el nodo NO está inicializado
+      command: kubeadm reset --force
+      when: not k8s_initialized.stat.exists
+      changed_when: false
+      ignore_errors: true
+
+    - name: Eliminar restos de configuración Kubernetes
+      shell: |
+        rm -rf /etc/kubernetes
+        rm -rf /var/lib/etcd
+        rm -rf /var/lib/kubelet
+        ip link delete cni0 2>/dev/null || true
+        ip link delete flannel.1 2>/dev/null || true
+      when: not k8s_initialized.stat.exists
+      changed_when: false
+      ignore_errors: true
+
+- name: "[1/4] Instalar kubelet, kubeadm y kubectl"
+  hosts: k8s_cluster
+  become: true
+  vars:
+    ansible_become_timeout: 60
+
+  tasks:
+
+    - name: Instalar prerequisitos
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - socat
+          - conntrack
+          - ebtables
+          - containerd
+        state: present
+        update_cache: true
+
+    - name: Deshabilitar swap temporalmente
+      command: swapoff -a
+      changed_when: false
+
+    - name: Deshabilitar swap permanentemente
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Crear directorio keyrings
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Añadir clave GPG Kubernetes
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key \
+          | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Añadir repositorio Kubernetes
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /
+
+    - name: Instalar kubelet, kubeadm y kubectl
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: true
+
+    - name: Bloquear versiones Kubernetes
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Configurar módulos kernel
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Cargar módulos kernel
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Configurar parámetros sysctl
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/k8s.conf
+        reload: true
+      loop:
+        - { key: net.bridge.bridge-nf-call-iptables,  value: "1" }
+        - { key: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+        - { key: net.ipv4.ip_forward,                 value: "1" }
+
+    - name: Crear directorio containerd
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+
+    - name: Generar config default containerd
+      shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Activar SystemdCgroup en containerd
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Reiniciar containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: true
+
+    - name: Configurar node-ip en kubelet
+      copy:
+        dest: /etc/default/kubelet
+        content: |
+          KUBELET_EXTRA_ARGS="--node-ip={{ ansible_host }}"
+
+    - name: Habilitar kubelet
+      systemd:
+        name: kubelet
+        enabled: true
+        state: restarted
+        daemon_reload: true
+
+- name: "[2/4] Inicializar control plane"
+  hosts: kube_control_plane
+  become: true
+  vars:
+    ansible_become_timeout: 120
+
+  tasks:
+
+    - name: Descargar imágenes Kubernetes
+      command: kubeadm config images pull --kubernetes-version=v1.28.6
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Inicializar cluster Kubernetes
+      command: >
+        kubeadm init
+        --kubernetes-version=v1.28.6
+        --pod-network-cidr=10.233.64.0/18
+        --service-cidr=10.233.0.0/18
+        --apiserver-advertise-address=192.168.56.11
+      args:
+        creates: /etc/kubernetes/admin.conf
+      ignore_errors: true
+      register: kubeadm_init
+
+    - name: Esperar API server
+      wait_for:
+        host: 192.168.56.11
+        port: 6443
+        delay: 10
+        timeout: 600
+
+    - name: Desplegar addons (kube-proxy + CoreDNS)
+      command: >
+        kubeadm init phase addon all
+        --kubernetes-version=v1.28.6
+        --pod-network-cidr=10.233.64.0/18
+        --service-cidr=10.233.0.0/18
+        --apiserver-advertise-address=192.168.56.11
+      changed_when: false
+
+    - name: Verificar admin.conf
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf_stat
+      become: false
+
+    - name: Fallar si kubeadm init falló
+      fail:
+        msg: |
+          kubeadm init no generó admin.conf
+
+          Revisar:
+            journalctl -xeu kubelet
+            crictl ps -a
+            systemctl status containerd
+      when: not admin_conf_stat.stat.exists
+      become: false
+
+
+    - name: Crear .kube para vagrant
+      file:
+        path: /home/vagrant/.kube
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0755'
+
+    - name: Copiar kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        remote_src: true
+        owner: vagrant
+        group: vagrant
+        mode: '0600'
+
+    - name: Descargar manifiesto Flannel
+      get_url:
+        url: https://raw.githubusercontent.com/flannel-io/flannel/v0.25.1/Documentation/kube-flannel.yml
+        dest: /tmp/flannel.yaml
+        mode: '0644'
+
+    - name: Ajustar CIDR pods en Flannel
+      replace:
+        path: /tmp/flannel.yaml
+        regexp: '10\.244\.0\.0/16'
+        replace: '10.233.64.0/18'
+
+    - name: Forzar interfaz privada en Flannel (enp0s8)
+      replace:
+        path: /tmp/flannel.yaml
+        regexp: '- --kube-subnet-mgr'
+        replace: "- --kube-subnet-mgr\n        - --iface=enp0s8"
+
+    - name: Instalar Flannel
+      command: kubectl apply -f /tmp/flannel.yaml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: flannel_apply
+      changed_when: >
+        'created' in flannel_apply.stdout or
+        'configured' in flannel_apply.stdout
+
+    - name: Esperar rollout de Flannel
+      command: kubectl rollout status daemonset/kube-flannel-ds -n kube-flannel --timeout=5m
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Esperar a que el control plane esté Ready
+      command: >
+        kubectl get node k8s-master
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: master_ready
+      until: master_ready.stdout == "True"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+- name: "[3/4] Unir workers al cluster"
+  hosts: kube_node
+  become: true
+  serial: 1
+  vars:
+    ansible_become_timeout: 60
+
+  tasks:
+
+    - name: Esperar disponibilidad API
+      wait_for:
+        host: 192.168.56.11
+        port: 6443
+        timeout: 300
+        delay: 5
+
+    - name: Obtener comando join
+      command: kubeadm token create --print-join-command
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
+      register: join_command
+      changed_when: false
+
+    - name: Unir worker al cluster
+      command: "{{ join_command.stdout }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+      register: join_result
+      retries: 5
+      delay: 60
+      until: join_result is not failed
+
+
+- name: "[4/4] Configurar kubectl local"
+  hosts: kube_control_plane
+  become: true
+
+  tasks:
+
+    - name: Obtener kubeconfig localmente
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        flat: true
+
+
+- name: "[5/5] Verificar cluster"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+
+    - name: Crear directorio .kube
+      file:
+        path: /home/vagrant/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Permisos kubeconfig
+      file:
+        path: /home/vagrant/.kube/config
+        mode: '0600'
+
+    - name: Esperar todos los nodos Ready
+      command: kubectl get nodes --no-headers
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config
+      register: nodes_status
+      until: >
+        (nodes_status.stdout_lines
+        | select('search', 'NotReady')
+        | list
+        | length) == 0
+      retries: 30
+      delay: 15
+      changed_when: false
+
+    - name: Mostrar nodos
+      command: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config
+      register: nodes
+      changed_when: false
+
+    - name: Estado cluster
+      debug:
+        msg: "{{ nodes.stdout_lines }}"
+
+    - name: Resumen final
+      debug:
+        msg:
+          - "════════════════════════════════════════════════"
+          - " Kubernetes v1.28.6 listo"
+          - "════════════════════════════════════════════════"
+          - " Siguiente:"
+          - "   ansible-playbook /vagrant/ansible/playbooks/fase3/fase3.yml"
+          - "════════════════════════════════════════════════"

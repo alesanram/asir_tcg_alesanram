@@ -1,0 +1,19 @@
+controller:
+  # NodePort en worker3 — coincide con el DNAT de fase2 (30080/30443)
+  service:
+    type: NodePort
+    nodePorts:
+      http: 30080
+      https: 30443
+
+  # Forzar scheduling en worker3 (nodo de entrada designado en fase2)
+  nodeSelector:
+    kubernetes.io/hostname: worker3
+
+  # Permitir que el ingress use certificados de cert-manager
+  extraArgs:
+    enable-ssl-passthrough: ""
+
+  config:
+    use-forwarded-headers: "true"
+    proxy-real-ip-cidr: "192.168.56.0/24"

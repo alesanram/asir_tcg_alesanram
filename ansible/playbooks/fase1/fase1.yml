@@ -1,0 +1,64 @@
+---
+- name: "[1/3] Bootstrap usuarios"
+  hosts: managed
+  become: true
+  vars:
+    ansible_user: vagrant
+    new_user: devops
+
+  pre_tasks:
+    - name: Confirmar conectividad con nodos
+      ping:
+
+  roles:
+    - users
+
+  post_tasks:
+    - name: Verificar que devops existe tras el bootstrap
+      command: id devops
+      changed_when: false
+      register: devops_check
+
+    - name: Mostrar resultado
+      debug:
+        msg: "Usuario devops creado correctamente en {{ inventory_hostname }}"
+
+- name: "[2/3] Configuracion SSH"
+  hosts: managed
+  become: true
+
+  roles:
+    - ssh
+
+  post_tasks:
+    - name: Verificar acceso SSH con devops
+      ping:
+
+- name: "[2.5/3] Sincronizar ansible.cfg en ansible-control"
+  hosts: ansible
+  gather_facts: false
+
+  tasks:
+    - name: Copiar ansible.cfg del proyecto a ~/.ansible.cfg
+      copy:
+        src: /vagrant/ansible/ansible.cfg
+        dest: /home/vagrant/.ansible.cfg
+        remote_src: true
+        mode: '0644'
+
+- name: "[3/3] Configuracion base K8s y edge"
+  hosts: k8s_cluster:edge
+  become: true
+
+  roles:
+    - common
+
+  post_tasks:
+    - name: Confirmar que swap está desactivado
+      command: swapon --show
+      register: swap_status
+      changed_when: false
+
+    - name: Resultado swap
+      debug:
+        msg: "{{ 'Swap DESACTIVADO correctamente' if swap_status.stdout == '' else 'AVISO: swap todavia activo: ' + swap_status.stdout }}"

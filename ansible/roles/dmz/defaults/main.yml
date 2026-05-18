@@ -1,0 +1,5 @@
+edge_external_iface: enp0s3
+edge_internal_iface: enp0s8
+ingress_ip: 192.168.56.14
+http_nodeport: 30080
+https_nodeport: 30443

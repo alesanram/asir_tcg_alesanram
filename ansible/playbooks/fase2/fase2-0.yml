@@ -1,0 +1,23 @@
+---
+- name: "[1/2] Verificar nodos K8s"
+  hosts: k8s_cluster
+  become: true
+  vars:
+    ansible_become_timeout: 60
+
+  tasks:
+    - name: Ping a todos los nodos
+      ping:
+
+    - name: Verificar que swap está desactivado (requisito K8s)
+      command: swapon --show
+      register: swap
+      changed_when: false
+      failed_when: swap.stdout != ""
+
+    - name: Asegurar que el hostname está en /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^127\\.0\\.1\\.1\\s"
+        line: "127.0.1.1 {{ inventory_hostname }}"
+        state: present

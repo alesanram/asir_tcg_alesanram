@@ -1,0 +1,45 @@
+- name: Instalar paquetes DMZ
+  apt:
+    name:
+      - nftables
+      - dnsmasq
+    state: present
+    update_cache: yes
+
+- name: Activar IP forwarding (kernel)
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: yes
+    state: present
+    reload: yes
+
+- name: Desplegar reglas nftables
+  template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: '0640'
+  notify: Recargar nftables
+
+- name: Habilitar y arrancar nftables
+  systemd:
+    name: nftables
+    enabled: yes
+    state: started
+
+- name: Configurar dnsmasq para la red interna
+  template:
+    src: dnsmasq-dmz.conf.j2
+    dest: /etc/dnsmasq.d/dmz.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reiniciar dnsmasq
+
+- name: Habilitar y arrancar dnsmasq
+  systemd:
+    name: dnsmasq
+    enabled: yes
+    state: started

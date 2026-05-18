@@ -1,0 +1,186 @@
+---
+- name: "Fase 3 — Despliegue de aplicaciones"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    k8s_dir: /vagrant/k8s
+    kubeconfig: /home/vagrant/.kube/config
+
+  tasks:
+
+    - name: "Añadir repos Helm"
+      kubernetes.core.helm_repository:
+        name: "{{ item.name }}"
+        repo_url: "{{ item.url }}"
+      loop:
+        - { name: metallb,       url: "https://metallb.github.io/metallb" }
+        - { name: jetstack,      url: "https://charts.jetstack.io" }
+        - { name: ingress-nginx, url: "https://kubernetes.github.io/ingress-nginx" }
+        - { name: bitnami,       url: "https://charts.bitnami.com/bitnami" }
+
+    - name: "Actualizar repos Helm"
+      command: helm repo update
+      changed_when: false
+
+    - name: "Instalar MetalLB"
+      kubernetes.core.helm:
+        name: metallb
+        chart_ref: metallb/metallb
+        release_namespace: metallb-system
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig }}"
+        wait: true
+        timeout: 5m
+
+    - name: "Esperar a que los webhooks de MetalLB estén listos"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: metallb-system
+        kubeconfig: "{{ kubeconfig }}"
+      register: metallb_deploy
+      until: >
+        metallb_deploy.resources | selectattr('status.readyReplicas', 'defined') |
+        map(attribute='status.readyReplicas') | list | min | default(0) | int > 0
+      retries: 20
+      delay: 10
+
+    - name: "Configurar pool de IPs MetalLB"
+      kubernetes.core.k8s:
+        src: "{{ k8s_dir }}/metallb/ipaddresspool.yml"
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+
+    - name: "Activar anuncio L2 MetalLB"
+      kubernetes.core.k8s:
+        src: "{{ k8s_dir }}/metallb/l2advertisement.yml"
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+
+    - name: "Instalar cert-manager (con CRDs)"
+      kubernetes.core.helm:
+        name: cert-manager
+        chart_ref: jetstack/cert-manager
+        release_namespace: cert-manager
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig }}"
+        set_values:
+          - value: installCRDs=true
+        wait: true
+        timeout: 5m
+
+    - name: "Esperar a que cert-manager esté listo"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: cert-manager
+        namespace: cert-manager
+        kubeconfig: "{{ kubeconfig }}"
+      register: cm_deploy
+      until: >
+        (cm_deploy.resources | first).status.readyReplicas | default(0) | int > 0
+      retries: 20
+      delay: 10
+
+    - name: "Crear ClusterIssuer self-signed y CA"
+      kubernetes.core.k8s:
+        src: "{{ k8s_dir }}/cert-manager/clusterissuer.yml"
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+
+    - name: "Esperar a que tcg-ca-secret esté creado por cert-manager"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: tcg-ca-secret
+        namespace: cert-manager
+        kubeconfig: "{{ kubeconfig }}"
+      register: ca_secret
+      until: ca_secret.resources | length > 0
+      retries: 20
+      delay: 10
+
+    - name: "Instalar NGINX Ingress Controller"
+      kubernetes.core.helm:
+        name: ingress-nginx
+        chart_ref: ingress-nginx/ingress-nginx
+        release_namespace: ingress-nginx
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig }}"
+        values_files:
+          - "{{ k8s_dir }}/ingress-nginx/values.yml"
+        wait: true
+        timeout: 5m
+
+    - name: "Esperar a que NGINX Ingress esté listo"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: ingress-nginx-controller
+        namespace: ingress-nginx
+        kubeconfig: "{{ kubeconfig }}"
+      register: ingress_deploy
+      until: >
+        (ingress_deploy.resources | first).status.readyReplicas | default(0) | int > 0
+      retries: 20
+      delay: 10
+
+    - name: "Crear namespace apps"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: apps
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+
+    - name: "Desplegar MariaDB con replicación"
+      kubernetes.core.helm:
+        name: mariadb
+        chart_ref: bitnami/mariadb
+        release_namespace: apps
+        kubeconfig: "{{ kubeconfig }}"
+        values_files:
+          - "{{ k8s_dir }}/mariadb/values.yml"
+        wait: true
+        timeout: 10m
+
+    - name: "Verificar pods MariaDB"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: apps
+        label_selectors:
+          - app.kubernetes.io/name=mariadb
+        kubeconfig: "{{ kubeconfig }}"
+      register: mariadb_pods
+
+    - name: "Mostrar estado MariaDB"
+      debug:
+        msg: "{{ item.metadata.name }}: {{ item.status.phase }}"
+      loop: "{{ mariadb_pods.resources }}"
+
+    - name: "Desplegar WordPress"
+      kubernetes.core.helm:
+        name: wordpress
+        chart_ref: bitnami/wordpress
+        release_namespace: apps
+        kubeconfig: "{{ kubeconfig }}"
+        values_files:
+          - "{{ k8s_dir }}/wordpress/values.yml"
+        wait: true
+        timeout: 10m
+
+    - name: "Estado de pods en namespace apps"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: apps
+        kubeconfig: "{{ kubeconfig }}"
+      register: apps_pods
+
+    - name: "Resumen de despliegue"
+      debug:
+        msg: "{{ item.metadata.name }}: {{ item.status.phase }}"
+      loop: "{{ apps_pods.resources }}"

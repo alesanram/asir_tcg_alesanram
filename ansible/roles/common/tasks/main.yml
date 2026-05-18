@@ -1,0 +1,29 @@
+- name: Actualizar cache apt
+  apt:
+    update_cache: yes
+
+- name: Actualizar sistema
+  apt:
+    upgrade: dist
+
+- name: Instalar paquetes comunes
+  apt:
+    name: "{{ packages_common }}"
+    state: present
+
+- name: Asegurar que el hostname está en /etc/hosts (evita timeout en sudo)
+  lineinfile:
+    path: /etc/hosts
+    regexp: "^127\\.0\\.1\\.1\\s"
+    line: "127.0.1.1 {{ inventory_hostname }}"
+    state: present
+
+- name: Desactivar swap (sesion actual)
+  shell: swapoff -a
+  changed_when: false
+
+- name: Eliminar swap de fstab (persistente)
+  replace:
+    path: /etc/fstab
+    regexp: '^.*swap.*$'
+    replace: ''

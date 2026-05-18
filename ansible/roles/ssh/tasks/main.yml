@@ -1,0 +1,13 @@
+- name: Asegurar permisos directorio .ssh
+  file:
+    path: "/home/devops/.ssh"
+    state: directory
+    owner: devops
+    group: devops
+    mode: '0700'
+
+- name: Copiar clave publica del control node
+  authorized_key:
+    user: devops
+    state: present
+    key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
