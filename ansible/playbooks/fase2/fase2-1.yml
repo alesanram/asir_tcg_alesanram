@@ -9,7 +9,7 @@
 
     - name: Comprobar si el nodo ya está inicializado/unido
       stat:
-        path: "{{ '/etc/kubernetes/admin.conf' if inventory_hostname in groups['kube_control_plane'] else '/etc/kubernetes/kubelet.conf' }}"
+        path: "{{ '/etc/kubernetes/admin.conf' if inventory_hostname in groups['kube_control_plane'] else '/var/lib/kubelet/config.yaml' }}"
       register: k8s_initialized
       become: false
 
@@ -203,6 +203,14 @@
         --apiserver-advertise-address=192.168.56.11
       changed_when: false
 
+    - name: Subir configuración kubeadm al clúster (necesario para join)
+      command: kubeadm init phase upload-config all
+      changed_when: false
+
+    - name: Regenerar RBAC de bootstrap tokens (permisos para join)
+      command: kubeadm init phase bootstrap-token
+      changed_when: false
+
     - name: Verificar admin.conf
       stat:
         path: /etc/kubernetes/admin.conf
@@ -314,7 +322,6 @@
       delay: 60
       until: join_result is not failed
 
-
 - name: "[4/4] Configurar kubectl local"
   hosts: kube_control_plane
   become: true
@@ -326,7 +333,6 @@
         src: /etc/kubernetes/admin.conf
         dest: /home/vagrant/.kube/config
         flat: true
-
 
 - name: "[5/5] Verificar cluster"
   hosts: localhost
@@ -370,13 +376,3 @@
     - name: Estado cluster
       debug:
         msg: "{{ nodes.stdout_lines }}"
-
-    - name: Resumen final
-      debug:
-        msg:
-          - "════════════════════════════════════════════════"
-          - " Kubernetes v1.28.6 listo"
-          - "════════════════════════════════════════════════"
-          - " Siguiente:"
-          - "   ansible-playbook /vagrant/ansible/playbooks/fase3/fase3.yml"
-          - "════════════════════════════════════════════════"
