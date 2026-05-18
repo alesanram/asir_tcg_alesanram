@@ -154,6 +154,7 @@
       kubernetes.core.helm:
         name: mariadb
         chart_ref: bitnami/mariadb
+        chart_version: "18.2.4"
         release_namespace: apps
         kubeconfig: "{{ kubeconfig }}"
         values_files:
@@ -180,6 +181,7 @@
       kubernetes.core.helm:
         name: wordpress
         chart_ref: bitnami/wordpress
+        chart_version: "23.1.18"
         release_namespace: apps
         kubeconfig: "{{ kubeconfig }}"
         values_files:
