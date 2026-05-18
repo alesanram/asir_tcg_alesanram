@@ -184,15 +184,16 @@ Levanta las VMs y configura los nodos (usuario devops, SSH, paquetes base, swap 
 vagrant up
 
 # Desde ansible-control
-bash /vagrant/scripts/setup-ssh.sh
+sudo bash /vagrant/scripts/bootstrap-ansible.sh 
+sudo bash /vagrant/scripts/setup-ssh.sh
 ansible-playbook /vagrant/ansible/playbooks/fase1/fase1.yml
 ```
 
 **Qué hace:**
 - Crea 6 VMs con Ubuntu 22.04
 - Instala Ansible y dependencias en ansible-control
-- Crea usuario `devops` en todos los nodos
 - Configura claves SSH
+- Crea usuario `devops` en todos los nodos
 - Desactiva swap (requisito Kubernetes)
 
 ---
