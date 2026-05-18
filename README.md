@@ -32,13 +32,13 @@ Infraestructura virtual distribuida y automatizada que simula un entorno datacen
                     │   dnsmasq DNS  │
                     └───────┬────────┘
                             │ Red privada 192.168.56.0/24
-          ┌─────────────────┼──────────────────────┐
-          │                 │                      │
-  ┌───────▼──────┐  ┌───────▼──────┐      ┌───────▼──────┐
-  │  k8s-master  │  │   worker1    │      │   worker3    │
-  │  192.168.56.11│  │ 192.168.56.12│      │ 192.168.56.14│
-  │  Control Plane│  │  Workloads  │      │ NGINX Ingress│
-  └──────────────┘  └──────────────┘      └──────────────┘
+          ┌─────────────────┼────────────────────────┐
+          │                 │                        │
+  ┌───────▼──────┐  ┌───────▼─────────┐      ┌───────▼──────┐
+  │  k8s-master  │  │   worker1/2     │      │   worker3    │
+  │ 192.168.56.11│  │ 192.168.56.11/12│      │ 192.168.56.14│
+  │ Control Plane│  │   Workloads     │      │ NGINX Ingress│
+  └──────────────┘  └─────────────────┘      └──────────────┘
                             │
                     ┌───────▼──────┐
                     │ansible-control│  192.168.56.10
@@ -51,7 +51,7 @@ Infraestructura virtual distribuida y automatizada que simula un entorno datacen
 
 | Nodo            | IP              | Rol                          | RAM    |
 |-----------------|-----------------|------------------------------|--------|
-| ansible-control | 192.168.56.10   | Automatización y despliegue  | 2048MB |
+| ansible-control | 192.168.56.10   | Automatización y despliegue  | 1024MB |
 | k8s-master      | 192.168.56.11   | Control plane Kubernetes     | 4096MB |
 | worker1         | 192.168.56.12   | Workloads generales          | 3072MB |
 | worker2         | 192.168.56.13   | Workloads generales          | 3072MB |
@@ -81,7 +81,7 @@ Internet :80/:443
 | kubeadm                 | v1.28     | Despliegue de Kubernetes             |
 | Kubernetes              | v1.28.6   | Orquestación de contenedores         |
 | containerd              | —         | Runtime de contenedores              |
-| Calico                  | —         | Red del clúster (CNI)                |
+| Flannel                 | v0.25.1   | Red del clúster (CNI)                |
 | MetalLB                 | —         | Balanceador de carga (L2)            |
 | NGINX Ingress           | —         | Entrada HTTP/HTTPS al clúster        |
 | cert-manager            | —         | Gestión de certificados TLS          |
@@ -151,24 +151,27 @@ Añade al fichero `C:\Windows\System32\drivers\etc\hosts`:
 192.168.56.15  grafana.tcg.local
 ```
 
-Crea el fichero `~/.ansible.cfg` en ansible-control:
+El fichero `~/.ansible.cfg` se copia automáticamente en ansible-control durante la fase 1. Si necesitas crearlo manualmente:
 
 ```bash
 cat > ~/.ansible.cfg << 'EOF'
 [defaults]
-inventory         = /vagrant/ansible/inventory/hosts.ini
-roles_path        = /vagrant/ansible/roles
-host_key_checking = False
-remote_user       = vagrant
-private_key_file  = ~/.ssh/id_ed25519
+inventory           = /vagrant/ansible/inventory/hosts.ini
+roles_path          = /vagrant/ansible/roles
+host_key_checking   = False
+remote_user         = vagrant
+private_key_file    = ~/.ssh/id_ed25519
 retry_files_enabled = False
 
 [privilege_escalation]
-become        = True
-become_method = sudo
-become_user   = root
+become         = True
+become_method  = sudo
+become_user    = root
+become_timeout = 60
 EOF
 ```
+
+> **Nota:** `ansible.cfg` no se lee desde `/vagrant` porque VirtualBox monta esa carpeta como world-writable y Ansible la ignora por seguridad. Siempre usar `~/.ansible.cfg`.
 
 ---
 
@@ -204,13 +207,17 @@ ansible-playbook /vagrant/ansible/playbooks/fase2/fase2-1.yml
 ```
 
 **Qué hace:**
-- Verifica prerequisitos (swap, conectividad, containerd)
-- Instala kubelet, kubeadm y kubectl v1.28.6 en todos los nodos
+- `fase2-0`: Verifica prerequisitos (ping, swap deshabilitado, hostname en /etc/hosts)
+- `fase2-1`: Instala kubelet, kubeadm y kubectl v1.28.6 en todos los nodos
+- Configura módulos kernel y parámetros sysctl necesarios para Kubernetes
+- Pre-descarga imágenes de Kubernetes antes de inicializar (evita timeouts)
 - Inicializa el control plane con kubeadm en k8s-master
-- Despliega Calico CNI y une los workers al clúster
+- Despliega kube-proxy y CoreDNS explícitamente (`kubeadm init phase addon all`)
+- Despliega Flannel CNI (forzado sobre interfaz `enp0s8` — red privada)
+- Une los workers al clúster (uno a uno para no saturar el API server)
 - Configura kubectl en ansible-control
 
-**Tiempo estimado:** 8-12 minutos
+**Tiempo estimado:** 10-15 minutos
 
 ---
 
