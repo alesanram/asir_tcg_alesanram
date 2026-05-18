@@ -8,7 +8,7 @@ mariadb:
   enabled: false
 
 externalDatabase:
-  host: mariadb.apps.svc.cluster.local
+  host: mariadb-primary.apps.svc.cluster.local
   port: 3306
   user: wordpress
   password: "WpTCG2024!"
