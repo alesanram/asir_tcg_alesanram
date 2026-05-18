@@ -47,6 +47,21 @@
       retries: 20
       delay: 10
 
+    - name: "Esperar a que el webhook de MetalLB acepte conexiones"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Endpoints
+        name: metallb-webhook-service
+        namespace: metallb-system
+        kubeconfig: "{{ kubeconfig }}"
+      register: metallb_webhook
+      until: >
+        metallb_webhook.resources | length > 0 and
+        metallb_webhook.resources[0].subsets is defined and
+        metallb_webhook.resources[0].subsets | length > 0
+      retries: 20
+      delay: 10
+
     - name: "Configurar pool de IPs MetalLB"
       kubernetes.core.k8s:
         src: "{{ k8s_dir }}/metallb/ipaddresspool.yml"
